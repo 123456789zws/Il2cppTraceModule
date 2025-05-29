@@ -1,14 +1,10 @@
-//
-// Created by wuwenhui on 2025/5/19.
-//
-
 #ifndef IL2CPP_TRACE_MODULE_IL2CPP_TRACE_H
 #define IL2CPP_TRACE_MODULE_IL2CPP_TRACE_H
 
 #include <stdint.h>
 
 #define MAX_FULL_NAME_LEN 200
-#define MAX_HOOK_FUN_NUM 1000
+#define MAX_HOOK_FUN_NUM 10000
 
 struct Il2CppMetadataField
 {

@@ -42,12 +42,12 @@ int init_il2cpp_fun(){
     if (handle) {
         int flag = -1;
         init_il2cpp_api(handle);
-        if(il2cpp_capture_memory_snapshot && il2cpp_free_captured_memory_snapshot && il2cpp_class_get_methods && il2cpp_method_get_name){
+        if(il2cpp_capture_memory_snapshot && il2cpp_start_gc_world && il2cpp_stop_gc_world && il2cpp_class_get_methods && il2cpp_method_get_name){
             flag = 0;
             Dl_info dlInfo;
             if (dladdr((void *) il2cpp_capture_memory_snapshot, &dlInfo)) {
                 il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
-                LOGD("il2cpp_base: %llx", il2cpp_base);
+                LOGD("il2cpp_base: 0x%llx", il2cpp_base);
             }
         }
         return flag;
@@ -84,6 +84,12 @@ char *get_trace_info(char *trace_file_path){
     }
 
     fclose(file);
+
+    if (last_line == NULL || last_line[0] == '\0') {
+        LOGE("can not get any trace item");
+        return NULL;
+    }
+
     return last_line;
 }
 
@@ -93,12 +99,38 @@ void trace_call_back(RegisterContext *ctx, const HookEntryInfo *info){
     return;
 }
 
+void check_fun_instruction(){
+    for (int i = 0; i < hook_fun_num; i++) {
+        uint32_t *fun_instructions = static_cast<uint32_t *>((void *)funaddrs[i]);
+        if(fun_instructions[1]==0xd65f03c0){//RET
+            LOGW("pass hook fun 0x%llx",funaddrs[i]-il2cpp_base);
+            funaddrs[i] = 0;
+        }
+    }
+    LOGD("check all fun instruction");
+}
 
 void hook_all_fun(){
     for (int i = 0; i < hook_fun_num; i++) {
-        DobbyInstrument((void *)funaddrs[i], trace_call_back);
+        if(funaddrs[i]==0){
+            continue;
+        }
+//        LOGD("fun 0x%llx hook",funaddrs[i]-il2cpp_base);
+        if(DobbyInstrument((void *)funaddrs[i], trace_call_back)!=0){
+            LOGD("fun 0x%llx hook error",funaddrs[i]-il2cpp_base);
+        }
+
     }
     LOGD("success hook all fun");
+}
+
+void clear_all_hook(){
+    for (int i = 0; i < hook_fun_num; i++) {
+        DobbyDestroy ((void *)funaddrs[i]);
+    }
+    LOGD("success clear all fun");
+    hook_fun_num = 0;
+    fun_name_dict.clear();
 }
 
 void check_all_methods(void *klass,char *clazzName) {
@@ -106,12 +138,14 @@ void check_all_methods(void *klass,char *clazzName) {
     long fun_offset;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
-        if (method->methodPointer) {
+        if (method->methodPointer && hook_fun_num<MAX_HOOK_FUN_NUM) {
+            fun_offset = (uint64_t)method->methodPointer - il2cpp_base;
+            if(fun_name_dict.find(fun_offset) != fun_name_dict.end()){
+                continue;
+            }
             char full_name[MAX_FULL_NAME_LEN];
             auto method_name = il2cpp_method_get_name(method);
             snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s",clazzName,method_name);
-//            LOGD("method_name:%s",full_name);
-            fun_offset = (uint64_t)method->methodPointer - il2cpp_base;
             std::string mfull_name(full_name);
             fun_name_dict[fun_offset]=mfull_name;
             funaddrs[hook_fun_num] = (uint64_t)method->methodPointer;
@@ -125,7 +159,6 @@ void trace_type_info(Il2CppMetadataType type_info,char *clazzName) {
     auto klass = reinterpret_cast<void *>(type_info.typeInfoAddress);
     check_all_methods(klass,clazzName);
 }
-
 
 
 void start_trace(char* data_dir_path){
@@ -143,45 +176,44 @@ void start_trace(char* data_dir_path){
     strcat(trace_file_path,"/files/test_trace.txt");
     LOGD("get trace_file_path:%s",trace_file_path);
 
-    char* tinfo = get_trace_info(trace_file_path);
-    if (tinfo == NULL || tinfo[0] == '\0') {
-        LOGE("can not get any trace item");
-        return;
-    }
-    LOGD("get trace item:%s",tinfo);
 
-//    char test_assemblyName[100];
-    char test_clazzName[240];
-    strcpy(test_clazzName,tinfo);
-    test_clazzName[strlen(test_clazzName)-1] = '\0';
-
-//    char* split_str = strstr(tinfo,"+");
-//    if(split_str==NULL){
-//        LOGE("can not find split char +");
-//        return;
-//    }
-//
-//    strncpy(test_assemblyName,tinfo,split_str-tinfo);
-//    strcpy(test_clazzName,split_str+1);
-//    test_clazzName[strlen(test_clazzName)-1] = '\0';
-//    LOGD("assemblyName:%s,clazzName:%s",test_assemblyName,test_clazzName);
 
     if (il2cpp_base!=0) {
         auto memorySnapshot = il2cpp_capture_memory_snapshot();
         auto all_type_infos_count = memorySnapshot->metadata.typeCount;
         auto all_type_infos = memorySnapshot->metadata.types;
         LOGD("all_typeCount:%d",all_type_infos_count);
-        for (int i = 0; i < all_type_infos_count; ++i) {
-            if(strcmp(all_type_infos[i].name,test_clazzName)==0){
-                LOGD("trace start");
-                trace_type_info(all_type_infos[i],all_type_infos[i].name);
-                break;
+        char tmp_info[240]="test";
+        while (true){
+            char test_info[240];
+            strcpy(test_info,get_trace_info(trace_file_path));
+            test_info[strlen(test_info)-1] = '\0';
+            if(strcmp(tmp_info,test_info)==0){
+                sleep(2);
+                continue;
+            } else{
+                strcpy(tmp_info,test_info);
+                //清除之前的hook
+                il2cpp_stop_gc_world();
+                clear_all_hook();
+                il2cpp_start_gc_world();
             }
+            for (int i = 0; i < all_type_infos_count; ++i) {
+                if(strcmp(all_type_infos[i].name,tmp_info)==0){
+                    if(hook_fun_num==MAX_HOOK_FUN_NUM){
+                        break;
+                    }
+                    LOGD("trace %s",all_type_infos[i].name);
+                    trace_type_info(all_type_infos[i],all_type_infos[i].name);
+                    break;
+                }
+            }
+//            check_fun_instruction();
+            il2cpp_stop_gc_world();
+            hook_all_fun();
+            il2cpp_start_gc_world();
         }
-        il2cpp_stop_gc_world();
-        hook_all_fun();
-        il2cpp_start_gc_world();
-        il2cpp_free_captured_memory_snapshot(memorySnapshot);
+//        il2cpp_free_captured_memory_snapshot(memorySnapshot);
     } else {
         LOGE("unknow error");
     }

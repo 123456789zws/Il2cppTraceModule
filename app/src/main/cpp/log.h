@@ -1,7 +1,3 @@
-//
-// Created by wuwenhui on 2025/5/28.
-//
-
 #ifndef IL2CPP_TRACE_MODULE_LOG_H
 #define IL2CPP_TRACE_MODULE_LOG_H
 
