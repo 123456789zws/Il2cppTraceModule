@@ -45,5 +45,4 @@ android {
 }
 
 dependencies {
-    implementation("io.github.vvb2060.ndk:dobby:+")
 }

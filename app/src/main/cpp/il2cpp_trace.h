@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 #define MAX_FULL_NAME_LEN 200
-#define MAX_HOOK_FUN_NUM 10000
 
 struct Il2CppMetadataField
 {

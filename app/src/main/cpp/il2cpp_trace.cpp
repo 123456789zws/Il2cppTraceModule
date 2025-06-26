@@ -7,7 +7,7 @@
 #include <map>
 #include "log.h"
 #include "xdl.h"
-#include "dobby.h"
+#include "uprobe_trace_user.h"
 #include "il2cpp_trace.h"
 
 #define DO_API(r, n, p) r (*n) p
@@ -17,8 +17,8 @@
 #undef DO_API
 
 char data_dir_path[PATH_MAX];
+char module_path[PATH_MAX];
 static uint64_t il2cpp_base = 0;
-uint64_t funaddrs[MAX_HOOK_FUN_NUM];
 int hook_fun_num=0;
 std::map<long,std::string> fun_name_dict;
 
@@ -47,7 +47,9 @@ int init_il2cpp_fun(){
             Dl_info dlInfo;
             if (dladdr((void *) il2cpp_capture_memory_snapshot, &dlInfo)) {
                 il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
+                strcpy(module_path,dlInfo.dli_fname);
                 LOGD("il2cpp_base: 0x%llx", il2cpp_base);
+                LOGD("module_path: %s", module_path);
             }
         }
         return flag;
@@ -93,42 +95,35 @@ char *get_trace_info(char *trace_file_path){
     return last_line;
 }
 
-void trace_call_back(RegisterContext *ctx, const HookEntryInfo *info){
-    long fun_offset = (uint64_t)info->target_address-il2cpp_base;
-    LOGD("%s is calling,offset:0x%llx",fun_name_dict[fun_offset].c_str(),fun_offset);
-    return;
-}
-
-void check_fun_instruction(){
-    for (int i = 0; i < hook_fun_num; i++) {
-        uint32_t *fun_instructions = static_cast<uint32_t *>((void *)funaddrs[i]);
-        if(fun_instructions[1]==0xd65f03c0){//RET
-            LOGW("pass hook fun 0x%llx",funaddrs[i]-il2cpp_base);
-            funaddrs[i] = 0;
-        }
-    }
-    LOGD("check all fun instruction");
-}
+//void check_fun_instruction(){
+//    for (int i = 0; i < hook_fun_num; i++) {
+//        uint32_t *fun_instructions = static_cast<uint32_t *>((void *)funaddrs[i]);
+//        if(fun_instructions[1]==0xd65f03c0){//RET
+//            LOGW("pass hook fun 0x%llx",funaddrs[i]-il2cpp_base);
+//            funaddrs[i] = 0;
+//        }
+//    }
+//    LOGD("check all fun instruction");
+//}
 
 void hook_all_fun(){
-    for (int i = 0; i < hook_fun_num; i++) {
-        if(funaddrs[i]==0){
-            continue;
+    for (auto it = fun_name_dict.begin(); it != fun_name_dict.end(); ++it) {
+        unsigned long fun_offset = it->first;
+        std::string fun_name = it->second;
+        int set_uprobe_ret = set_fun_info2(fun_offset,(char*)fun_name.c_str());
+        if(set_uprobe_ret!=SET_TRACE_SUCCESS){
+            LOGE("set uprobe in fun_name:%s,fun_offset:0x%llx",fun_name.c_str(),fun_offset);
         }
-//        LOGD("fun 0x%llx hook",funaddrs[i]-il2cpp_base);
-        if(DobbyInstrument((void *)funaddrs[i], trace_call_back)!=0){
-            LOGD("fun 0x%llx hook error",funaddrs[i]-il2cpp_base);
-        }
-
     }
-    LOGD("success hook all fun");
+    LOGD("success hook fun num:%d",hook_fun_num);
 }
 
 void clear_all_hook(){
-    for (int i = 0; i < hook_fun_num; i++) {
-        DobbyDestroy ((void *)funaddrs[i]);
+    int clear_ret = clear_all_uprobes();
+    if(clear_ret!=SET_TRACE_SUCCESS){
+        LOGE("clear all uprobes error");
     }
-    LOGD("success clear all fun");
+    LOGD("success clear all uprobes");
     hook_fun_num = 0;
     fun_name_dict.clear();
 }
@@ -138,7 +133,7 @@ void check_all_methods(void *klass,char *clazzName) {
     long fun_offset;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
-        if (method->methodPointer && hook_fun_num<MAX_HOOK_FUN_NUM) {
+        if (method->methodPointer && hook_fun_num<MAX_HOOK_NUM) {
             fun_offset = (uint64_t)method->methodPointer - il2cpp_base;
             if(fun_name_dict.find(fun_offset) != fun_name_dict.end()){
                 continue;
@@ -148,7 +143,6 @@ void check_all_methods(void *klass,char *clazzName) {
             snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s",clazzName,method_name);
             std::string mfull_name(full_name);
             fun_name_dict[fun_offset]=mfull_name;
-            funaddrs[hook_fun_num] = (uint64_t)method->methodPointer;
             hook_fun_num++;
         }
     }
@@ -170,6 +164,16 @@ void start_trace(char* data_dir_path){
         return;
     }
     LOGD("success get il2cpp api fun");
+
+    int set_module_base_ret = set_module_base(il2cpp_base);
+    int set_target_file_ret = set_target_file(module_path);
+    int set_target_uid_ret = set_target_uid(getuid());
+
+    if (set_module_base_ret!=SET_TRACE_SUCCESS || set_target_file_ret!=SET_TRACE_SUCCESS || set_target_uid_ret!=SET_TRACE_SUCCESS){
+        LOGE("init uprobe hook error");
+        return;
+    }
+    LOGD("init uprobe hook success");
 
 
     strcpy(trace_file_path,data_dir_path);
@@ -200,7 +204,7 @@ void start_trace(char* data_dir_path){
             }
             for (int i = 0; i < all_type_infos_count; ++i) {
                 if(strcmp(all_type_infos[i].name,tmp_info)==0){
-                    if(hook_fun_num==MAX_HOOK_FUN_NUM){
+                    if(hook_fun_num==MAX_HOOK_NUM){
                         break;
                     }
                     LOGD("trace %s",all_type_infos[i].name);

@@ -37,13 +37,10 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         il2cpp_trace.cpp
         ${xdl-src})
 
-find_package(dobby REQUIRED CONFIG)
-
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
 # build script, prebuilt third-party libraries, or Android system libraries.
 target_link_libraries(${CMAKE_PROJECT_NAME}
         # List libraries link to the target library
-        dobby::dobby
         log)
