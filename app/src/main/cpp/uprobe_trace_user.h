@@ -37,13 +37,6 @@ int set_fun_info(unsigned long fun_offset,char *fun_name){
     return ret;
 }
 
-//set_fun_info函数设置成功但失效的情况下再用这个函数
-//，最好在一个程序内不要与set_fun_info函数同时使用
-int set_fun_info2(unsigned long fun_offset,char *fun_name){
-    int ret = syscall(__NR_mincore,fun_offset-0x1000,TRACE_FLAG+SET_FUN_INFO,fun_name);
-    return ret;
-}
-
 int clear_all_uprobes(){
     int ret = syscall(__NR_mincore,0,TRACE_FLAG+CLEAR_UPROBE,"");
     return ret;
