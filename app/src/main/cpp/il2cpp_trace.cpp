@@ -110,7 +110,7 @@ void hook_all_fun(){
     for (auto it = fun_name_dict.begin(); it != fun_name_dict.end(); ++it) {
         unsigned long fun_offset = it->first;
         std::string fun_name = it->second;
-        int set_uprobe_ret = set_fun_info2(fun_offset,(char*)fun_name.c_str());
+        int set_uprobe_ret = set_fun_info(fun_offset,(char*)fun_name.c_str());
         if(set_uprobe_ret!=SET_TRACE_SUCCESS){
             LOGE("set uprobe in fun_name:%s,fun_offset:0x%llx",fun_name.c_str(),fun_offset);
         }
