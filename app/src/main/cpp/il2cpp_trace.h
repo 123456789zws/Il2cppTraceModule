@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define MAX_FULL_NAME_LEN 200
+#define MAX_VMA_NUM 10
 
 struct Il2CppMetadataField
 {
