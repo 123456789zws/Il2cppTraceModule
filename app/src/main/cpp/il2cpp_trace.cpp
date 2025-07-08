@@ -7,6 +7,7 @@
 #include <map>
 #include "log.h"
 #include "xdl.h"
+#include "capstone/include/capstone.h"
 #include "uprobe_trace_user.h"
 #include "il2cpp_trace.h"
 
@@ -25,6 +26,7 @@ unsigned long start_addrs[MAX_VMA_NUM];
 unsigned long end_addrs[MAX_VMA_NUM];
 unsigned long vma_base[MAX_VMA_NUM];
 int vma_num=0;
+csh dis;
 
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \
@@ -99,16 +101,6 @@ char *get_trace_info(char *trace_file_path){
     return last_line;
 }
 
-//void check_fun_instruction(){
-//    for (int i = 0; i < hook_fun_num; i++) {
-//        uint32_t *fun_instructions = static_cast<uint32_t *>((void *)funaddrs[i]);
-//        if(fun_instructions[1]==0xd65f03c0){//RET
-//            LOGW("pass hook fun 0x%llx",funaddrs[i]-il2cpp_base);
-//            funaddrs[i] = 0;
-//        }
-//    }
-//    LOGD("check all fun instruction");
-//}
 
 void hook_all_fun(){
     for (auto it = fun_name_dict.begin(); it != fun_name_dict.end(); ++it) {
@@ -121,7 +113,10 @@ void hook_all_fun(){
                 uprobe_offset = fun_addr-start_addrs[i]+vma_base[i];
             }
         }
-        int set_uprobe_ret = set_fun_info(uprobe_offset,fun_offset,(char*)fun_name.c_str());
+        char oinsn[4];
+        memcpy(oinsn,(void *)fun_addr,4);
+//        LOGD("uprobe_offset:%lx,insn:%x %x %x %x",uprobe_offset,oinsn[0],oinsn[1],oinsn[2],oinsn[3]);
+        int set_uprobe_ret = set_fun_info(uprobe_offset,fun_offset,(char*)fun_name.c_str(),oinsn);
         if(set_uprobe_ret!=SET_TRACE_SUCCESS){
             LOGE("error set uprobe in fun_name:%s,fun_offset:0x%llx,uprobe_offset:%llx",fun_name.c_str(),fun_offset,uprobe_offset);
         }
@@ -139,21 +134,61 @@ void clear_all_hook(){
     fun_name_dict.clear();
 }
 
+
+long get_secret_fun_offset(uint64_t fun_addr){
+    long fun_offset=-1;
+    cs_insn *insns;
+    size_t insns_num;
+    uint8_t *fun_instructions = static_cast<uint8_t *>((void *)fun_addr);
+    int insnid;
+    insns_num = cs_disasm(dis,fun_instructions,MAX_DIS_INS*4,fun_addr,0,&insns);
+    if (insns_num<=0){
+        LOGE("can not disasm at:%llx",fun_addr);
+        return -1;
+    }
+    for (int i = 0; i < insns_num; ++i) {
+        insnid = insns[i].id;
+
+        if(insnid == ARM64_INS_ADRP  || insnid == ARM64_INS_ADR || insnid == ARM64_INS_TBNZ
+            || insnid == ARM64_INS_CBZ || insnid == ARM64_INS_TBZ || insnid == ARM64_INS_CBNZ
+            ||insnid == ARM64_INS_BR|| insnid == ARM64_INS_BL || insnid == ARM64_INS_B
+            || insnid == ARM64_INS_RET){
+            fun_offset = insns[i].address - il2cpp_base;
+//            LOGD("insn mnemonic:%s,fun_addr:%llx,fun_offset:%lx",insns[i].mnemonic,insns[i].address,fun_offset);
+            break;
+        }
+
+
+    }
+    cs_free(insns,insns_num);
+    return fun_offset;
+
+}
+
 void check_all_methods(void *klass,char *clazzName) {
     void *iter = nullptr;
     long fun_offset;
+    long secret_fun_offset;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
         if (method->methodPointer && hook_fun_num<MAX_HOOK_NUM) {
             fun_offset = (uint64_t)method->methodPointer - il2cpp_base;
-            if(fun_name_dict.find(fun_offset) != fun_name_dict.end()){
+            secret_fun_offset = get_secret_fun_offset((uint64_t)method->methodPointer);
+            if(secret_fun_offset==-1){
+                LOGE("funoffset:0x%lx can not get secret_fun_offset",fun_offset);
                 continue;
             }
+            if(fun_name_dict.find(secret_fun_offset) != fun_name_dict.end()){
+                continue;
+            }
+
+//            LOGD("fun_offset:%lx,secret_fun_offset:%lx,secret_fun_addr:%llx",fun_offset,secret_fun_offset,il2cpp_base+secret_fun_offset);
             char full_name[MAX_FULL_NAME_LEN];
             auto method_name = il2cpp_method_get_name(method);
-            snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s",clazzName,method_name);
+            snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s_0x%lx",clazzName,method_name,fun_offset);
+//            snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s",clazzName,method_name);
             std::string mfull_name(full_name);
-            fun_name_dict[fun_offset]=mfull_name;
+            fun_name_dict[secret_fun_offset]=mfull_name;
             hook_fun_num++;
         }
     }
@@ -200,6 +235,13 @@ bool init_vma(){
     return true;
 }
 
+bool capstone_init(){
+    if(cs_open(CS_ARCH_ARM64,CS_MODE_LITTLE_ENDIAN,&dis)!=CS_ERR_OK){
+        return false;
+    }
+    return true;
+}
+
 void start_trace(char* data_dir_path){
     char trace_file_path[PATH_MAX];
 
@@ -226,6 +268,11 @@ void start_trace(char* data_dir_path){
     }
     LOGD("init uprobe hook success");
 
+    if(!capstone_init()){
+        LOGE("capstone init error");
+        return;
+    }
+    LOGD("capstone init success");
 
     strcpy(trace_file_path,data_dir_path);
     strcat(trace_file_path,"/files/test_trace.txt");

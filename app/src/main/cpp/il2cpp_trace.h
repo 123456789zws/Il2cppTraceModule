@@ -5,6 +5,7 @@
 
 #define MAX_FULL_NAME_LEN 200
 #define MAX_VMA_NUM 10
+#define MAX_DIS_INS 30
 
 struct Il2CppMetadataField
 {
