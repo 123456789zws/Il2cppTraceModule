@@ -27,14 +27,9 @@ project("il2cpp_trace_module")
 
 include_directories(
         xdl/include
-        capstone/include
 )
 
 aux_source_directory(xdl xdl-src)
-
-add_library(capstone_lib STATIC IMPORTED)
-set_target_properties(capstone_lib PROPERTIES IMPORTED_LOCATION
-        ${CMAKE_SOURCE_DIR}/capstone/libs/libcapstone.a)
 
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
@@ -48,5 +43,4 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
 # build script, prebuilt third-party libraries, or Android system libraries.
 target_link_libraries(${CMAKE_PROJECT_NAME}
         # List libraries link to the target library
-        capstone_lib
         log)
