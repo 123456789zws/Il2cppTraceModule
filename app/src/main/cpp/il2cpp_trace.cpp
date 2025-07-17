@@ -21,6 +21,10 @@ char module_path[PATH_MAX];
 static uint64_t il2cpp_base = 0;
 int hook_fun_num=0;
 std::map<long,std::string> fun_name_dict;
+unsigned long start_addrs[MAX_VMA_NUM];
+unsigned long end_addrs[MAX_VMA_NUM];
+unsigned long vma_base[MAX_VMA_NUM];
+int vma_num=0;
 
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \
@@ -95,24 +99,24 @@ char *get_trace_info(char *trace_file_path){
     return last_line;
 }
 
-//void check_fun_instruction(){
-//    for (int i = 0; i < hook_fun_num; i++) {
-//        uint32_t *fun_instructions = static_cast<uint32_t *>((void *)funaddrs[i]);
-//        if(fun_instructions[1]==0xd65f03c0){//RET
-//            LOGW("pass hook fun 0x%llx",funaddrs[i]-il2cpp_base);
-//            funaddrs[i] = 0;
-//        }
-//    }
-//    LOGD("check all fun instruction");
-//}
 
 void hook_all_fun(){
     for (auto it = fun_name_dict.begin(); it != fun_name_dict.end(); ++it) {
         unsigned long fun_offset = it->first;
         std::string fun_name = it->second;
-        int set_uprobe_ret = set_fun_info(fun_offset,(char*)fun_name.c_str());
+        unsigned long fun_addr = il2cpp_base+fun_offset;
+        unsigned long uprobe_offset;
+        for (int i=0;i<vma_num;i++){
+            if(fun_addr>start_addrs[i] && fun_addr<end_addrs[i]){
+                uprobe_offset = fun_addr-start_addrs[i]+vma_base[i];
+            }
+        }
+        char oinsn[4];
+        memcpy(oinsn,(void *)fun_addr,4);
+//        LOGD("uprobe_offset:%lx,insn:%x %x %x %x",uprobe_offset,oinsn[0],oinsn[1],oinsn[2],oinsn[3]);
+        int set_uprobe_ret = set_fun_info(uprobe_offset,fun_offset,(char*)fun_name.c_str(),oinsn);
         if(set_uprobe_ret!=SET_TRACE_SUCCESS){
-            LOGE("set uprobe in fun_name:%s,fun_offset:0x%llx",fun_name.c_str(),fun_offset);
+            LOGE("error set uprobe in fun_name:%s,fun_offset:0x%llx,uprobe_offset:%llx",fun_name.c_str(),fun_offset,uprobe_offset);
         }
     }
     LOGD("success hook fun num:%d",hook_fun_num);
@@ -128,6 +132,7 @@ void clear_all_hook(){
     fun_name_dict.clear();
 }
 
+
 void check_all_methods(void *klass,char *clazzName) {
     void *iter = nullptr;
     long fun_offset;
@@ -135,9 +140,11 @@ void check_all_methods(void *klass,char *clazzName) {
         //TODO attribute
         if (method->methodPointer && hook_fun_num<MAX_HOOK_NUM) {
             fun_offset = (uint64_t)method->methodPointer - il2cpp_base;
+
             if(fun_name_dict.find(fun_offset) != fun_name_dict.end()){
                 continue;
             }
+
             char full_name[MAX_FULL_NAME_LEN];
             auto method_name = il2cpp_method_get_name(method);
             snprintf(full_name,MAX_FULL_NAME_LEN,"%s::%s",clazzName,method_name);
@@ -154,6 +161,41 @@ void trace_type_info(Il2CppMetadataType type_info,char *clazzName) {
     check_all_methods(klass,clazzName);
 }
 
+bool init_vma(){
+    FILE *f;
+    char buf[256];
+    f = fopen("/proc/self/maps","r");
+    if(!f){
+        return false;
+    }
+    while (fgets(buf,256,f)!=NULL){
+        unsigned long tstart,tend,tbase;
+        char permissions[5];
+        int major,minor;
+        unsigned long inode;
+        char path[256];
+
+        int fields = sscanf(buf,"%lx-%lx %4s %lx %x:%x %lu %s",&tstart,&tend,permissions,&tbase,&major,&minor,&inode,path);
+        if(fields==8){
+            if(strcmp(path,module_path)==0){
+//                LOGD("start:%lx,end:%lx,permissions:%s,tbase:%lx\n",tstart,tend,permissions,tbase);
+                if(permissions[2]=='x'){
+                    start_addrs[vma_num] = tstart;
+                    end_addrs[vma_num] = tend;
+                    vma_base[vma_num] = tbase;
+                    vma_num++;
+                }
+            }
+        }
+
+    }
+    fclose(f);
+    if(vma_num==0){
+        return false;
+    }
+    return true;
+}
+
 
 void start_trace(char* data_dir_path){
     char trace_file_path[PATH_MAX];
@@ -164,6 +206,12 @@ void start_trace(char* data_dir_path){
         return;
     }
     LOGD("success get il2cpp api fun");
+    bool parse_ret = init_vma();
+    if(!parse_ret){
+        LOGE("can not get vma info");
+        return;
+    }
+
 
     int set_module_base_ret = set_module_base(il2cpp_base);
     int set_target_file_ret = set_target_file(module_path);
